@@ -1,149 +1,61 @@
-import csv
-import json
-from lxml import etree
-from urllib.parse import urljoin
-from tqdm import tqdm
-
-from sgzip.dynamic import DynamicZipSearch, SearchableCountries
+from sgscrape.sgrecord import SgRecord
+from sgscrape.sgwriter import SgWriter
 from sgrequests import SgRequests
+from sglogging import SgLogSetup
+from bs4 import BeautifulSoup as bs
+from sgscrape.sgpostal import parse_address_intl
 
+logger = SgLogSetup().get_logger("good-sam")
 
-def write_output(data):
-    with open("data.csv", mode="w", encoding="utf-8") as output_file:
-        writer = csv.writer(
-            output_file, delimiter=",", quotechar='"', quoting=csv.QUOTE_ALL
-        )
-
-        # Header
-        writer.writerow(
-            [
-                "locator_domain",
-                "page_url",
-                "location_name",
-                "street_address",
-                "city",
-                "state",
-                "zip",
-                "country_code",
-                "store_number",
-                "phone",
-                "location_type",
-                "latitude",
-                "longitude",
-                "hours_of_operation",
-            ]
-        )
-        # Body
-        for row in data:
-            writer.writerow(row)
+_headers = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.141 Safari/537.36",
+}
 
 
 def fetch_data():
-    # Your scraper here
-    session = SgRequests().requests_retry_session(retries=1, backoff_factor=0.3)
+    with SgRequests() as session:
+        locator_domain = "https://www.good-sam.com/"
+        base_url = "https://www.good-sam.com/coveo/rest/search/v2?sitecoreItemUri=sitecore%3A%2F%2Fweb%2F%7B7D2D77E4-CABF-4506-84FF-C3DC79854B74%7D%3Flang%3Den%26amp%3Bver%3D1&siteName=GoodSam&actionsHistory=%5B%5D&referrer=&visitorId=&isGuestUser=true&aq=(((%40fz95xpath79929%3D%3D7D2D77E4CABF450684FFC3DC79854B74%20%40fz95xtemplate79929%3D%3D57E2BFE90934466D93CD4A4405A15441)%20NOT%20%40fz95xtemplate79929%3D%3D(ADB6CA4F03EF4F47B9AC9CE2BA53FF97%2CFE5DD82648C6436DB87A7C4210C7413B)))%20(((%24qf(function%3A%20%27dist(%40flocationlatitude79929%2C%40flocationlongitude79929%2C0%2C0)%2F%201609.344%27%2C%20fieldName%3A%20%27distance%27)%20%40distance%3C100000)%20OR%20(%40fstate79929%3D%3DKS))%20OR%20(%40flocationservices79929%3DKS))&cq=(%40fz95xlanguage79929%3D%3Den)%20(%40fz95xlatestversion79929%3D%3D1)%20(%40source%3D%3D%22GoodSam_coveo_web_index%20-%20sanford-coveo-prod%22)&searchHub=GSSLocationSearch&locale=en&maximumAge=9000000&firstResult=0&numberOfResults=1000&excerptLength=200&enableDidYouMean=true&sortCriteria=distance%20ascending&queryFunctions=%5B%5D&rankingFunctions=%5B%5D&facetOptions=%7B%7D&categoryFacets=%5B%5D&retrieveFirstSentences=true"
+        locations = session.get(base_url, headers=_headers).json()
 
-    items = []
-    scraped_items = []
+        logger.info(f"{len(locations['results'])} locations found")
 
-    DOMAIN = "doitbest.com"
-    start_url = "https://doitbest.com/StoreLocator/Submit"
-
-    headers = {
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-    }
-    response = session.get("https://doitbest.com/store-locator", headers=headers)
-    dom = etree.HTML(response.text)
-    csrfid = dom.xpath('//input[@id="StoreLocatorForm_CSRFID"]/@value')[0]
-    token = dom.xpath('//input[@id="StoreLocatorForm_CSRFToken"]/@value')[0]
-
-    headers = {
-        "content-type": "application/json; charset=UTF-8",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-        "x-mod-sbb-ctype": "xhr",
-        "x-requested-with": "XMLHttpRequest",
-    }
-
-    all_locations = []
-    all_codes = DynamicZipSearch(
-        country_codes=[SearchableCountries.USA],
-        max_radius_miles=200,
-        max_search_results=None,
-    )
-    for code in all_codes:
-        body = {
-            "StoreLocatorForm": {
-                "Location": code,
-                "Filter": "All Locations",
-                "Range": "250",
-                "CSRFID": csrfid,
-                "CSRFToken": token,
-            }
-        }
-        response = session.post(start_url, headers=headers, json=body, verify=False)
-        data = json.loads(response.text)
-        if not data["Response"].get("Stores"):
-            continue
-        all_locations += data["Response"]["Stores"]
-
-    for poi in tqdm(all_locations):
-        store_url = poi["WebsiteURL"]
-        store_url = urljoin(start_url, store_url) if store_url else "<MISSING>"
-        try:
-            location_name = poi["Name"]
-        except TypeError:
-            continue
-        location_name = location_name if location_name else "<MISSING>"
-        if "do it best" not in location_name.lower():
-            continue
-        street_address = poi["Address1"]
-        if poi["Address2"]:
-            street_address += ", " + poi["Address2"]
-        street_address = street_address if street_address else "<MISSING>"
-        city = poi["City"]
-        city = city if city else "<MISSING>"
-        state = poi["State"]
-        state = state if state else "<MISSING>"
-        zip_code = poi["ZipCode"]
-        zip_code = zip_code if zip_code else "<MISSING>"
-        country_code = "<MISSING>"
-        store_number = poi["ID"]
-        store_number = store_number if store_number else "<MISSING>"
-        phone = poi["Phone"]
-        phone = phone if phone else "<MISSING>"
-        location_type = "<MISSING>"
-        latitude = poi["Latitude"]
-        latitude = latitude if latitude else "<MISSING>"
-        longitude = poi["Longitude"]
-        longitude = longitude if longitude else "<MISSING>"
-        hours_of_operation = "<MISSING>"
-
-        item = [
-            DOMAIN,
-            store_url,
-            location_name,
-            street_address,
-            city,
-            state,
-            zip_code,
-            country_code,
-            store_number,
-            phone,
-            location_type,
-            latitude,
-            longitude,
-            hours_of_operation,
-        ]
-        if store_number not in scraped_items:
-            scraped_items.append(store_number)
-            items.append(item)
-
-    return items
-
-
-def scrape():
-    data = fetch_data()
-    write_output(data)
+        for _ in locations["results"]:
+            logger.info(_["clickUri"])
+            page_url = _["clickUri"].replace(":443", "")
+            logger.info(page_url)
+            sp1 = bs(session.get(page_url, headers=_headers).text, "lxml")
+            addr = parse_address_intl(
+                " ".join(
+                    sp1.select_one("div.location-info__info-col p").stripped_strings
+                )
+            )
+            street_address = addr.street_address_1
+            if addr.street_address_2:
+                street_address += " " + addr.street_address_2
+            coord = (
+                sp1.select_one("div.swiper-slide iframe")["src"]
+                .split("&q=")[1]
+                .split("&z")[0]
+                .split(",")
+            )
+            yield SgRecord(
+                page_url=page_url,
+                location_name=_["Title"],
+                street_address=street_address,
+                city=addr.city,
+                state=addr.state,
+                zip_postal=addr.postcode,
+                country_code="US",
+                latitude=coord[0],
+                longitude=coord[1],
+                phone=sp1.select_one("div.location-info__info-col h4").text,
+                locator_domain=locator_domain,
+            )
 
 
 if __name__ == "__main__":
-    scrape()
+    with SgWriter() as writer:
+        results = fetch_data()
+        for rec in results:
+            writer.write_row(rec)
