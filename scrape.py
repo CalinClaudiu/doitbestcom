@@ -90,7 +90,9 @@ async def get_brand(brand_code, brand_name, url):
     ] = "Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.66 Safari/537.36"
 
     session = SgRequests()
-    son = session.get(url, headers=headers).json()
+    son = session.get(url, headers=headers)
+    print(son.text)
+    son = son.json()
     task_list = []
     results = []
     chunk_size = 10
